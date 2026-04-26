@@ -5,17 +5,14 @@ import shutil
 import os
 import uuid
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-import numpy as np
-from rembg import remove
 import io
-import base64
 
 app = FastAPI(title="Image Editor API")
 
 # Enable CORS for your website
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace with your domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,42 +30,13 @@ def root():
 def health():
     return {"status": "ok"}
 
-# =============== BACKGROUND REMOVAL ===============
-@app.post("/remove-background")
-async def remove_background(file: UploadFile = File(...)):
-    """Remove background from image (AI-powered)"""
-    try:
-        unique_id = str(uuid.uuid4())
-        input_path = f"temp/input_{unique_id}.png"
-        output_path = f"temp/output_{unique_id}.png"
-        
-        # Save uploaded file
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # Process with rembg
-        with open(input_path, "rb") as i:
-            input_data = i.read()
-            output_data = remove(input_data)
-        
-        with open(output_path, "wb") as o:
-            o.write(output_data)
-        
-        return FileResponse(output_path, media_type="image/png", filename="no-bg.png")
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        # Cleanup
-        if os.path.exists(input_path): os.remove(input_path)
-
 # =============== APPLY FILTERS ===============
 @app.post("/apply-filter")
 async def apply_filter(
     file: UploadFile = File(...),
     filter_type: str = Form(...)
 ):
-    """Apply filters: grayscale, sepia, blur, sharpen, edge, emboss, contour"""
+    """Apply filters: grayscale, sepia, blur, sharpen, edge, emboss, contour, invert"""
     try:
         unique_id = str(uuid.uuid4())
         input_path = f"temp/input_{unique_id}.png"
@@ -79,7 +47,6 @@ async def apply_filter(
         
         img = Image.open(input_path)
         
-        # Convert to RGB if needed
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
@@ -132,10 +99,9 @@ async def adjust_image(
     file: UploadFile = File(...),
     brightness: float = Form(0),
     contrast: float = Form(0),
-    saturation: float = Form(0),
-    sharpness: float = Form(0)
+    saturation: float = Form(0)
 ):
-    """Adjust brightness, contrast, saturation, sharpness"""
+    """Adjust brightness, contrast, saturation"""
     try:
         unique_id = str(uuid.uuid4())
         input_path = f"temp/input_{unique_id}.png"
@@ -161,42 +127,8 @@ async def adjust_image(
             enhancer = ImageEnhance.Color(img)
             img = enhancer.enhance(factor)
         
-        if sharpness != 0:
-            factor = 1 + (sharpness / 100)
-            enhancer = ImageEnhance.Sharpness(img)
-            img = enhancer.enhance(factor)
-        
         img.convert('RGB').save(output_path, 'JPEG', quality=90)
         return FileResponse(output_path, media_type="image/jpeg", filename="adjusted.jpg")
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if os.path.exists(input_path): os.remove(input_path)
-
-# =============== CROP IMAGE ===============
-@app.post("/crop-image")
-async def crop_image(
-    file: UploadFile = File(...),
-    x: int = Form(...),
-    y: int = Form(...),
-    width: int = Form(...),
-    height: int = Form(...)
-):
-    """Crop image to specified coordinates"""
-    try:
-        unique_id = str(uuid.uuid4())
-        input_path = f"temp/input_{unique_id}.png"
-        output_path = f"temp/output_{unique_id}.png"
-        
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        img = Image.open(input_path)
-        cropped = img.crop((x, y, x + width, y + height))
-        cropped.save(output_path)
-        
-        return FileResponse(output_path, media_type="image/png", filename="cropped.png")
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -271,42 +203,37 @@ async def transform_image(
     finally:
         if os.path.exists(input_path): os.remove(input_path)
 
-# =============== ADD TEXT TO IMAGE ===============
-@app.post("/add-text")
-async def add_text(
+# =============== COMPRESS IMAGE ===============
+@app.post("/compress-image")
+async def compress_image(
     file: UploadFile = File(...),
-    text: str = Form(...),
-    x: int = Form(...),
-    y: int = Form(...),
-    font_size: int = Form(30),
-    color_r: int = Form(255),
-    color_g: int = Form(255),
-    color_b: int = Form(255)
+    quality: int = Form(85)
 ):
-    """Add text overlay to image"""
+    """Compress image with quality setting"""
     try:
-        from PIL import ImageDraw, ImageFont
-        
         unique_id = str(uuid.uuid4())
         input_path = f"temp/input_{unique_id}.png"
-        output_path = f"temp/output_{unique_id}.png"
+        output_path = f"temp/output_{unique_id}.jpg"
         
         with open(input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        img = Image.open(input_path).convert('RGBA')
-        draw = ImageDraw.Draw(img)
+        img = Image.open(input_path)
         
-        # Try to load a nice font
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
-        except:
-            font = ImageFont.load_default()
+        original_size = os.path.getsize(input_path)
+        img.convert('RGB').save(output_path, 'JPEG', quality=quality, optimize=True)
+        compressed_size = os.path.getsize(output_path)
         
-        draw.text((x, y), text, fill=(color_r, color_g, color_b, 255), font=font)
-        
-        img.save(output_path)
-        return FileResponse(output_path, media_type="image/png", filename="text-added.png")
+        return FileResponse(
+            output_path, 
+            media_type="image/jpeg", 
+            filename="compressed.jpg",
+            headers={
+                "X-Original-Size": str(original_size),
+                "X-Compressed-Size": str(compressed_size),
+                "X-Saved-Percent": str(round((1 - compressed_size/original_size) * 100, 1))
+            }
+        )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -316,7 +243,7 @@ async def add_text(
 # =============== GET IMAGE INFO ===============
 @app.post("/image-info")
 async def get_image_info(file: UploadFile = File(...)):
-    """Get image dimensions, format, size"""
+    """Get image dimensions and size"""
     try:
         unique_id = str(uuid.uuid4())
         input_path = f"temp/input_{unique_id}.png"
@@ -335,50 +262,6 @@ async def get_image_info(file: UploadFile = File(...)):
             "size_bytes": size,
             "size_kb": round(size / 1024, 2)
         })
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if os.path.exists(input_path): os.remove(input_path)
-
-# =============== COMPRESS IMAGE ===============
-@app.post("/compress-image")
-async def compress_image(
-    file: UploadFile = File(...),
-    quality: int = Form(85),
-    max_width: int = Form(0),
-    max_height: int = Form(0)
-):
-    """Compress image with quality setting"""
-    try:
-        unique_id = str(uuid.uuid4())
-        input_path = f"temp/input_{unique_id}.png"
-        output_path = f"temp/output_{unique_id}.jpg"
-        
-        with open(input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        img = Image.open(input_path)
-        
-        # Resize if max dimensions provided
-        if max_width > 0 and max_height > 0:
-            img.thumbnail((max_width, max_height), Image.LANCZOS)
-        
-        img.convert('RGB').save(output_path, 'JPEG', quality=quality, optimize=True)
-        
-        original_size = os.path.getsize(input_path)
-        compressed_size = os.path.getsize(output_path)
-        
-        return FileResponse(
-            output_path, 
-            media_type="image/jpeg", 
-            filename="compressed.jpg",
-            headers={
-                "X-Original-Size": str(original_size),
-                "X-Compressed-Size": str(compressed_size),
-                "X-Saved-Percent": str(round((1 - compressed_size/original_size) * 100, 1))
-            }
-        )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
